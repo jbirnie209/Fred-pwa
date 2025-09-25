@@ -69,7 +69,7 @@ async function getFredJSON(path, params){
 }
 
 async function fredSeries(seriesId, startDateISO){
-  if(!FRED_API_KEY || FRED_API_KEY === "e8c5d1a5ac7cd1defb7ea0ab2b960767"){
+  if(!FRED_API_KEY || FRED_API_KEY === "YOUR_FRED_API_KEY_HERE"){
     throw new Error("Missing FRED_API_KEY — edit index.html and paste your key.");
   }
   const params = {
