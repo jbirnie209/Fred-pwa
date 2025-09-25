@@ -5,146 +5,174 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>US Indicators</title>
 <meta name="theme-color" content="#111111" />
-<link rel="manifest" href='data:application/manifest+json,{"name":"US Indicators","short_name":"US Indics","display":"standalone","background_color":"#111","theme_color":"#111"}' />
+<link rel="manifest" href="data:application/manifest+json,{&quot;name&quot;:&quot;US Indicators&quot;,&quot;short_name&quot;:&quot;US Indics&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;#111&quot;,&quot;theme_color&quot;:&quot;#111&quot;}" />
 <style>
   :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
   body { margin: 0; font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: Canvas; color: CanvasText; }
-  header { position: sticky; top: 0; backdrop-filter: blur(10px); background: color-mix(in oklab, Canvas 80%, transparent); border-bottom: 1px solid color-mix(in oklab, CanvasText 12%, transparent); padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  header { position: sticky; top: 0; backdrop-filter: blur(10px); background: color-mix(in oklab, Canvas 80%, transparent); border-bottom: 1px solid color-mix(in oklab, CanvasText 12%, transparent); padding: 10px 12px; display: flex; gap: 8px; align-items: center; }
   h1 { font-size: 17px; margin: 0; flex: 1; }
   button { border: 1px solid color-mix(in oklab, CanvasText 20%, transparent); background: color-mix(in oklab, Canvas 90%, CanvasText 5%); color: CanvasText; border-radius: 9px; padding: 8px 12px; }
-  button:disabled { opacity: .6; }
   .wrap { padding: 10px; display: grid; gap: 14px; }
   .card { border: 1px solid color-mix(in oklab, CanvasText 15%, transparent); border-radius: 12px; padding: 10px; background: color-mix(in oklab, Canvas 92%, CanvasText 4%); }
   .title { font-weight: 600; font-size: 14px; margin: 6px 0 10px; }
-  .foot { font-size: 12px; opacity: .8; margin-top: 8px; }
-  .note { font-size: 12px; opacity: .75; }
-  .status { font-size: 12px; opacity: .8; }
+  .foot { font-size: 12px; opacity: .7; margin-top: 8px; }
 </style>
-
-<!-- Plotly (for pinch/zoom) -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
-<!-- Alternate CDN (uncomment if the line above is blocked) -->
-<!-- <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" defer></script> -->
-
 <script>
-/*** ========= CONFIG: paste your FRED API key below ========= ***/
-const FRED_API_KEY = "e8c5d1a5ac7cd1defb7ea0ab2b960767"; // <-- replace between quotes
-/*** ========================================================== ***/
-
-const SERIES = { HY_OAS:"BAMLH0A0HYM2", DGS10:"DGS10", DGS1:"DGS1", TIPS10:"DFII10" };
-
-// Endpoints
-const FRED_BASE     = "https://api.stlouisfed.org";
-const FALLBACK_1    = "https://cors.isomorphic-git.org/https://api.stlouisfed.org";
-const FALLBACK_2    = "https://r.jina.ai/http://api.stlouisfed.org"; // read-only relay
-
+const FRED_API_KEY = "e8c5d1a5ac7cd1defb7ea0ab2b960767"; // <-- paste your key
+const SERIES = {
+  HY_OAS: "BAMLH0A0HYM2",
+  DGS10 : "DGS10",
+  DGS1  : "DGS1",
+  TIPS10: "DFII10"
+};
 const MS_PER_DAY = 86400000;
-const statusEl = () => document.getElementById("status");
 
-function toDate(s){ const [y,m,d]=s.split("-").map(Number); return new Date(Date.UTC(y,m-1,d)); }
+function fmt2(x){ return Number(x).toFixed(2); }
 
-async function fetchWithTimeout(url, opts={}, ms=12000){
-  const ctl = new AbortController();
-  const timer = setTimeout(()=>ctl.abort(), ms);
-  try { return await fetch(url, { ...opts, signal: ctl.signal, cache: "no-store", mode: "cors" }); }
-  finally { clearTimeout(timer); }
-}
-
-async function tryJSON(base, path, params, label){
-  const u = new URL(path, base);
-  Object.entries(params).forEach(([k,v]) => u.searchParams.set(k, v));
-  const r = await fetchWithTimeout(u.toString());
-  if(!r.ok){
-    const body = await r.text().catch(()=> "");
-    throw new Error(`${label} HTTP ${r.status} • ${u.pathname}\n${body.slice(0,240)}`);
-  }
-  // FALLBACK_2 returns plain JSON too; safe to parse
-  return await r.json();
-}
-
-async function getFredJSON(path, params){
-  // 1) Direct
-  try {
-    const j = await tryJSON(FRED_BASE, path, params, "Direct");
-    statusEl().textContent = "Loaded via: Direct";
-    return j;
-  } catch(e1){
-    // 2) Fallback 1
-    try {
-      const j = await tryJSON(FALLBACK_1, path, params, "Fallback#1");
-      statusEl().textContent = "Loaded via: Fallback #1 (isomorphic-git CORS)";
-      return j;
-    } catch(e2){
-      // 3) Fallback 2
-      const j = await tryJSON(FALLBACK_2, path, params, "Fallback#2");
-      statusEl().textContent = "Loaded via: Fallback #2 (r.jina.ai)";
-      return j;
-    }
-  }
+function toDate(s){ // "yyyy-mm-dd" -> Date UTC
+  const [y,m,d] = s.split("-").map(Number);
+  return new Date(Date.UTC(y, m-1, d));
 }
 
 async function fredSeries(seriesId, startDateISO){
-  if(!FRED_API_KEY || FRED_API_KEY === "YOUR_FRED_API_KEY_HERE"){
-    throw new Error("Missing FRED_API_KEY — edit index.html and paste your key.");
-  }
-  const params = {
-    series_id: seriesId,
-    api_key: FRED_API_KEY.trim(),
-    file_type: "json",
-    frequency: "d"
-  };
-  if(startDateISO) params.observation_start = startDateISO;
-
-  const j = await getFredJSON("/fred/series/observations", params);
-  if(!j || !Array.isArray(j.observations)) throw new Error("Malformed FRED response");
+  const u = new URL("https://api.stlouisfed.org/fred/series/observations");
+  u.searchParams.set("series_id", seriesId);
+  u.searchParams.set("api_key", FRED_API_KEY);
+  u.searchParams.set("file_type", "json");
+  u.searchParams.set("frequency", "d");
+  if(startDateISO) u.searchParams.set("observation_start", startDateISO);
+  const r = await fetch(u);
+  if(!r.ok) throw new Error("FRED error " + r.status);
+  const j = await r.json();
+  // filter out "." and map
   return j.observations
     .filter(o => o.value !== "." && o.date)
     .map(o => ({ t: toDate(o.date), v: Number(o.value) }))
-    .sort((a,b)=>a.t - b.t);
+    .sort((a,b)=>a.t-b.t);
 }
 
+// trailing rolling median by time window (10 years)
 function rollingMedian(series, years=10){
   if(!series.length) return [];
-  const out=[]; let start=0;
+  const out = [];
+  let start = 0;
   for(let i=0;i<series.length;i++){
     const endDate = series[i].t;
-    const cutoff = new Date(endDate); cutoff.setUTCFullYear(cutoff.getUTCFullYear()-years);
-    while(start<i && series[start].t < cutoff) start++;
+    const cutoff = new Date(endDate.getTime());
+    cutoff.setUTCFullYear(cutoff.getUTCFullYear()-years);
+    while(start < i && series[start].t < cutoff) start++;
     const slice = series.slice(start, i+1).map(p=>p.v).sort((a,b)=>a-b);
-    const n=slice.length;
-    const m=(n&1)? slice[(n-1)>>1] : 0.5*(slice[n/2-1]+slice[n/2]);
-    out.push({ t:endDate, v:m });
+    const n = slice.length;
+    const m = (n%2) ? slice[(n-1)>>1] : 0.5*(slice[n/2-1]+slice[n/2]);
+    out.push({t:endDate, v:m});
   }
   return out;
 }
 
 function lastNYears(series, years=10){
   if(!series.length) return [];
-  const last = series.at(-1).t;
-  const cut = new Date(last); cut.setUTCFullYear(cut.getUTCFullYear()-years);
+  const last = series[series.length-1].t;
+  const cut = new Date(last.getTime());
+  cut.setUTCFullYear(cut.getUTCFullYear()-years);
   return series.filter(p=>p.t >= cut);
 }
-function toXY(s){ return { x:s.map(p=>p.t), y:s.map(p=>p.v) }; }
 
-function renderChart(elId, title, series, medSeries){
-  if(typeof Plotly === "undefined"){
-    alert("Plotly failed to load. If on corporate Wi-Fi, try mobile data.");
-    return;
+function toPlotlyXY(series){ 
+  return { x: series.map(p=>p.t), y: series.map(p=>p.v) };
+}
+
+async function loadAll(){
+  setBusy(true);
+  const twentyYearsAgo = new Date(); twentyYearsAgo.setUTCFullYear(twentyYearsAgo.getUTCFullYear()-20);
+  const startISO = twentyYearsAgo.toISOString().slice(0,10);
+  try {
+    const [hy, d10, d1, tips] = await Promise.all([
+      fredSeries(SERIES.HY_OAS, startISO),
+      fredSeries(SERIES.DGS10,  startISO),
+      fredSeries(SERIES.DGS1,   startISO),
+      fredSeries(SERIES.TIPS10, startISO)
+    ]);
+
+    // compute curve = DGS10 - DGS1 (join by date)
+    const map1 = new Map(d1.map(p=>[+p.t, p.v]));
+    const curve = d10.filter(p=>map1.has(+p.t)).map(p=>({ t:p.t, v: p.v - map1.get(+p.t) }));
+
+    // medians
+    const hyMed    = rollingMedian(hy, 10);
+    const curveMed = rollingMedian(curve, 10);
+    const tipsMed  = rollingMedian(tips, 10);
+
+    // show last 10y by default
+    renderChart("hy", "ICE BofA US High Yield OAS (%, trailing 10y median)", hy, hyMed, "percent");
+    renderChart("curve", "10Y – 1Y Treasury Spread (pp, trailing 10y median)", curve, curveMed, "number");
+    renderChart("tips", "10Y TIPS Yield (%, trailing 10y median)", tips, tipsMed, "percent");
+    document.getElementById("foot").textContent = "Data: FRED • Updated " + (new Date()).toLocaleString();
+  } catch(e){
+    alert("Load failed: " + e.message);
+    console.error(e);
+  } finally {
+    setBusy(false);
   }
+}
+
+function setBusy(on){
+  document.getElementById("refresh").disabled = on;
+  document.getElementById("refresh").textContent = on ? "Refreshing…" : "Refresh";
+}
+
+function renderChart(elId, title, series, medSeries, yfmt){
+  // default x-range to last 10y
   const last10 = lastNYears(series, 10);
-  const x0 = last10[0]?.t ?? series[0]?.t ?? new Date(Date.now()-3650*MS_PER_DAY);
-  const x1 = last10.at(-1)?.t ?? series.at(-1)?.t ?? new Date();
+  const x0 = last10.length ? last10[0].t : (series[0]?.t ?? new Date(Date.now()-3650*MS_PER_DAY));
+  const x1 = last10.length ? last10[last10.length-1].t : (series[series.length-1]?.t ?? new Date());
+
+  const main = toPlotlyXY(series);
+  const med  = toPlotlyXY(medSeries);
 
   const layout = {
     title: { text: title, x: 0, xanchor: "left", font: { size: 14 } },
     margin: { l: 50, r: 10, t: 36, b: 30 },
-    paper_bgcolor: "transparent", plot_bgcolor: "transparent",
+    paper_bgcolor: "transparent",
+    plot_bgcolor: "transparent",
     xaxis: { range: [x0, x1], showgrid: true },
-    yaxis: { tickformat: ".2f", showgrid: true }
+    yaxis: { tickformat: yfmt === "percent" ? ".2f" : ".2f", ticksuffix: yfmt==="percent"?"":"", showgrid: true },
+    legend: { orientation: "h", x: 0, y: 1.1 },
+    dragmode: "pan"
+  };
 
+  const traces = [
+    { name: "Value", x: main.x, y: main.y, mode: "lines", line: { width: 2 } },
+    { name: "Trailing 10y median", x: med.x, y: med.y, mode: "lines", line: { width: 1, dash: "dash" } }
+  ];
 
+  // match system dark mode
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  if(prefersDark){
+    layout.font = { color: "white" };
+    layout.xaxis.gridcolor = "rgba(255,255,255,0.15)";
+    layout.yaxis.gridcolor = "rgba(255,255,255,0.15)";
+  }
+
+  Plotly.newPlot(elId, traces, layout, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["select2d","lasso2d"] });
+}
+</script>
+</head>
+<body>
+  <header>
+    <h1>US Indicators</h1>
+    <button id="refresh" onclick="loadAll()">Refresh</button>
+  </header>
+  <div class="wrap">
+    <div class="card"><div class="title">ICE BofA US High Yield OAS</div><div id="hy" style="height:280px;"></div></div>
+    <div class="card"><div class="title">10Y – 1Y Treasury Spread</div><div id="curve" style="height:280px;"></div></div>
+    <div class="card"><div class="title">10Y TIPS Yield</div><div id="tips" style="height:280px;"></div></div>
     <div class="foot" id="foot">Loading…</div>
   </div>
+  <script>
+    // auto-load on open / when returning to the page
+    document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadAll(); });
+    window.addEventListener("load", loadAll);
+  </script>
 </body>
 </html>
