@@ -3,128 +3,120 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>US Indicators (Debug)</title>
+<title>US Indicators</title>
 <meta name="theme-color" content="#111111" />
+<link rel="manifest" href='data:application/manifest+json,{"name":"US Indicators","short_name":"US Indics","display":"standalone","background_color":"#111","theme_color":"#111"}' />
 <style>
   :root { color-scheme: light dark; }
-  body { margin:0; font-family:-apple-system,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:Canvas; color:CanvasText; }
-  header { position:sticky; top:0; backdrop-filter:blur(10px); background:color-mix(in oklab, Canvas 80%, transparent); border-bottom:1px solid color-mix(in oklab, CanvasText 12%, transparent); padding:10px 12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  h1 { font-size:17px; margin:0; flex:1; }
-  button { border:1px solid color-mix(in oklab, CanvasText 20%, transparent); background:color-mix(in oklab, Canvas 90%, CanvasText 5%); color:CanvasText; border-radius:9px; padding:8px 12px; }
-  .wrap { padding:10px; display:grid; gap:14px; }
-  .card { border:1px solid color-mix(in oklab, CanvasText 15%, transparent); border-radius:12px; padding:10px; background:color-mix(in oklab, Canvas 92%, CanvasText 4%); }
-  .title { font-weight:600; font-size:14px; margin:6px 0 10px; }
-  .foot { font-size:12px; opacity:.7; margin-top:8px; }
-  .error { white-space:pre-wrap; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border-left:4px solid #d33; padding:8px 10px; background:color-mix(in oklab, Canvas 90%, #d33 8%); }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: Canvas; color: CanvasText; }
+  header { position: sticky; top: 0; backdrop-filter: blur(10px); background: color-mix(in oklab, Canvas 80%, transparent); border-bottom: 1px solid color-mix(in oklab, CanvasText 12%, transparent); padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 17px; margin: 0; flex: 1; }
+  button { border: 1px solid color-mix(in oklab, CanvasText 20%, transparent); background: color-mix(in oklab, Canvas 90%, CanvasText 5%); color: CanvasText; border-radius: 9px; padding: 8px 12px; }
+  button:disabled { opacity: .6; }
+  .wrap { padding: 10px; display: grid; gap: 14px; }
+  .card { border: 1px solid color-mix(in oklab, CanvasText 15%, transparent); border-radius: 12px; padding: 10px; background: color-mix(in oklab, Canvas 92%, CanvasText 4%); }
+  .title { font-weight: 600; font-size: 14px; margin: 6px 0 10px; }
+  .foot { font-size: 12px; opacity: .7; margin-top: 8px; }
+  .note { font-size: 12px; opacity: .75; }
 </style>
-<!-- Try primary Plotly CDN; if blocked, uncomment the alternate below -->
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
-<!-- <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" defer></script> -->
-<script>
-const FRED_API_KEY = "63a8a3d8e203adfae3c7c2570e8bb26b"; // <-- paste real key between quotes
 
+<!-- Plotly for pinch-zoom/pan charts -->
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+
+<script>
+/*** ========= CONFIG: paste your FRED API key below ========= ***/
+const FRED_API_KEY = "63a8a3d8e203adfae3c7c2570e8bb26b"; // <-- replace between quotes
+/*** ========================================================== ***/
+
+// Series IDs
 const SERIES = { HY_OAS:"BAMLH0A0HYM2", DGS10:"DGS10", DGS1:"DGS1", TIPS10:"DFII10" };
+
+// Primary API and a safe fallback relay (used only if direct call fails due to network)
+const FRED_BASE = "https://api.stlouisfed.org";
+const FRED_FALLBACK = "https://cors.isomorphic-git.org/https://api.stlouisfed.org";
+
 const MS_PER_DAY = 86400000;
 
-const logEl = ()=>document.getElementById("log");
-function log(msg){ console.log(msg); const el=logEl(); if(el){ el.textContent += (el.textContent? "\n":"") + msg; } }
-function showErr(err){ const el=logEl(); if(el){ el.classList.add("error"); el.textContent = String(err); } else { alert(String(err)); } }
-
-function fmt2(x){ return Number(x).toFixed(2); }
 function toDate(s){ const [y,m,d]=s.split("-").map(Number); return new Date(Date.UTC(y,m-1,d)); }
 
-async function fredSeries(seriesId, startDateISO){
-  const u = new URL("https://api.stlouisfed.org/fred/series/observations");
-  u.searchParams.set("series_id", seriesId);
-  u.searchParams.set("api_key", FRED_API_KEY);
-  u.searchParams.set("file_type", "json");
-  u.searchParams.set("frequency", "d");
-  if(startDateISO) u.searchParams.set("observation_start", startDateISO);
+// Fetch with timeout helper
+async function fetchWithTimeout(url, opts={}, ms=12000){
+  const ctl = new AbortController();
+  const timer = setTimeout(()=>ctl.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ctl.signal, cache: "no-store", mode: "cors" }); }
+  finally { clearTimeout(timer); }
+}
 
-  log("GET " + u.toString());
-  let r;
-  try { r = await fetch(u); }
-  catch(e){ throw new Error("Network error fetching " + seriesId + ": " + e.message); }
-
-  if(!r.ok){
-    let body="";
-    try{ body = await r.text(); } catch {}
-    throw new Error(`FRED HTTP ${r.status} for ${seriesId}\n` + body.slice(0,500));
+// Try FRED directly; if it fails (network/CORS), retry via fallback relay
+async function getFredJSON(path, params){
+  const direct = new URL(path, FRED_BASE);
+  Object.entries(params).forEach(([k,v]) => direct.searchParams.set(k, v));
+  try {
+    const r = await fetchWithTimeout(direct.toString());
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } catch {
+    const alt = new URL(path, FRED_FALLBACK);
+    Object.entries(params).forEach(([k,v]) => alt.searchParams.set(k, v));
+    const r2 = await fetchWithTimeout(alt.toString());
+    if(!r2.ok){
+      const body = await r2.text().catch(()=> "");
+      throw new Error(`Fallback HTTP ${r2.status}\n${body.slice(0,300)}`);
+    }
+    return await r2.json();
   }
-  let j;
-  try{ j = await r.json(); }
-  catch(e){ throw new Error("JSON parse error for " + seriesId + ": " + e.message); }
+}
 
-  if(!j.observations){ throw new Error("Malformed response for "+seriesId+": " + JSON.stringify(j).slice(0,200)); }
+async function fredSeries(seriesId, startDateISO){
+  if(!FRED_API_KEY || FRED_API_KEY === "63a8a3d8e203adfae3c7c2570e8bb26b"){
+    throw new Error("Missing FRED_API_KEY — edit index.html and paste your key.");
+  }
+  const params = {
+    series_id: seriesId,
+    api_key: FRED_API_KEY.trim(),
+    file_type: "json",
+    frequency: "d"
+  };
+  if(startDateISO) params.observation_start = startDateISO;
 
+  const j = await getFredJSON("/fred/series/observations", params);
+  if(!j || !Array.isArray(j.observations)) throw new Error("Malformed FRED response");
   return j.observations
     .filter(o => o.value !== "." && o.date)
     .map(o => ({ t: toDate(o.date), v: Number(o.value) }))
-    .sort((a,b)=>a.t-b.t);
+    .sort((a,b)=>a.t - b.t);
 }
 
+// Trailing rolling median over a date window (10 years)
 function rollingMedian(series, years=10){
   if(!series.length) return [];
-  const out = []; let start=0;
+  const out=[]; let start=0;
   for(let i=0;i<series.length;i++){
     const endDate = series[i].t;
     const cutoff = new Date(endDate); cutoff.setUTCFullYear(cutoff.getUTCFullYear()-years);
     while(start<i && series[start].t < cutoff) start++;
     const slice = series.slice(start, i+1).map(p=>p.v).sort((a,b)=>a-b);
     const n = slice.length;
-    const m = (n%2) ? slice[(n-1)>>1] : 0.5*(slice[n/2-1]+slice[n/2]);
+    const m = (n&1) ? slice[(n-1)>>1] : 0.5*(slice[n/2-1]+slice[n/2]);
     out.push({ t:endDate, v:m });
   }
   return out;
 }
+
 function lastNYears(series, years=10){
   if(!series.length) return [];
-  const last = series[series.length-1].t;
+  const last = series.at(-1).t;
   const cut = new Date(last); cut.setUTCFullYear(cut.getUTCFullYear()-years);
   return series.filter(p=>p.t >= cut);
 }
 function toXY(s){ return { x:s.map(p=>p.t), y:s.map(p=>p.v) }; }
 
-async function loadAll(){
-  setBusy(true);
-  logEl().textContent = ""; log("Starting loadAll()");
-  if(!FRED_API_KEY || FRED_API_KEY === "YOUR_FRED_API_KEY_HERE"){ showErr("Missing FRED_API_KEY in index.html"); setBusy(false); return; }
-
-  const t0 = Date.now();
-  const twenty = new Date(); twenty.setUTCFullYear(twenty.getUTCFullYear()-20);
-  const startISO = twenty.toISOString().slice(0,10);
-  try{
-    const [hy, d10, d1, tips] = await Promise.all([
-      fredSeries(SERIES.HY_OAS, startISO),
-      fredSeries(SERIES.DGS10,  startISO),
-      fredSeries(SERIES.DGS1,   startISO),
-      fredSeries(SERIES.TIPS10, startISO),
-    ]);
-    const map1 = new Map(d1.map(p=>[+p.t, p.v]));
-    const curve = d10.filter(p=>map1.has(+p.t)).map(p=>({ t:p.t, v:p.v - map1.get(+p.t) }));
-
-    renderChart("hy", "ICE BofA US High Yield OAS (%, trailing 10y median)", hy, rollingMedian(hy,10), "percent");
-    renderChart("curve", "10Y – 1Y Treasury Spread (pp, trailing 10y median)", curve, rollingMedian(curve,10), "number");
-    renderChart("tips", "10Y TIPS Yield (%, trailing 10y median)", tips, rollingMedian(tips,10), "percent");
-
-    document.getElementById("foot").textContent =
-      "OK • " + new Date().toLocaleString() + " • " + ((Date.now()-t0)|0) + " ms";
-  } catch(e){
-    console.error(e);
-    showErr("Load failed:\n" + e.message);
-  } finally {
-    setBusy(false);
+function renderChart(elId, title, series, medSeries){
+  if(typeof Plotly === "undefined"){
+    alert("Plotly failed to load. If on corporate Wi-Fi, try mobile data.");
+    return;
   }
-}
-
-function setBusy(on){
-  const btn = document.getElementById("refresh");
-  btn.disabled = on; btn.textContent = on ? "Refreshing…" : "Refresh";
-}
-
-function renderChart(elId, title, series, medSeries, yfmt){
-  if(typeof Plotly === "undefined"){ showErr("Plotly failed to load. Try the alternate CDN (uncomment in HTML)."); return; }
-
   const last10 = lastNYears(series, 10);
   const x0 = last10[0]?.t ?? series[0]?.t ?? new Date(Date.now()-3650*MS_PER_DAY);
   const x1 = last10.at(-1)?.t ?? series.at(-1)?.t ?? new Date();
@@ -146,36 +138,78 @@ function renderChart(elId, title, series, medSeries, yfmt){
     layout.yaxis.gridcolor = "rgba(255,255,255,0.15)";
   }
 
-  const traces = [
+  Plotly.newPlot(elId, [
     { name:"Value", ...toXY(series), mode:"lines", line:{ width:2 } },
     { name:"Trailing 10y median", ...toXY(medSeries), mode:"lines", line:{ width:1, dash:"dash" } },
-  ];
-
-  Plotly.newPlot(elId, traces, layout, { responsive:true, displaylogo:false, modeBarButtonsToRemove:["select2d","lasso2d"] });
+  ], layout, { responsive:true, displaylogo:false, modeBarButtonsToRemove:["select2d","lasso2d"] });
 }
 
-function testAPI(){
-  const url = `https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key=${encodeURIComponent(FRED_API_KEY)}&file_type=json&frequency=d&observation_start=2010-01-01`;
-  window.open(url, "_blank");
+function setBusy(on){
+  const b = document.getElementById("refresh");
+  if(!b) return;
+  b.disabled = on; b.textContent = on ? "Refreshing…" : "Refresh";
 }
+
+async function loadAll(){
+  setBusy(true);
+  const twenty = new Date(); twenty.setUTCFullYear(twenty.getUTCFullYear()-20);
+  const startISO = twenty.toISOString().slice(0,10);
+  try{
+    const [hy, d10, d1, tips] = await Promise.all([
+      fredSeries(SERIES.HY_OAS, startISO),
+      fredSeries(SERIES.DGS10,  startISO),
+      fredSeries(SERIES.DGS1,   startISO),
+      fredSeries(SERIES.TIPS10, startISO),
+    ]);
+
+    // Compute 10Y – 1Y spread by joining on date
+    const map1 = new Map(d1.map(p=>[+p.t, p.v]));
+    const curve = d10.filter(p=>map1.has(+p.t)).map(p=>({ t:p.t, v:p.v - map1.get(+p.t) }));
+
+    // Render charts (default domain shows last 10y; pinch/drag to explore)
+    renderChart("hy",    "ICE BofA US High Yield OAS (%, trailing 10y median)", hy,    rollingMedian(hy,10));
+    renderChart("curve", "10Y – 1Y Treasury Spread (pp, trailing 10y median)", curve, rollingMedian(curve,10));
+    renderChart("tips",  "10Y TIPS Yield (%, trailing 10y median)",             tips,  rollingMedian(tips,10));
+
+    document.getElementById("foot").textContent = "Data: FRED • Updated " + (new Date()).toLocaleString();
+  } catch(e){
+    alert("Load failed:\n" + e.message);
+    console.error(e);
+  } finally {
+    setBusy(false);
+  }
+}
+
+// Auto-refresh on open and when returning to the page
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadAll(); });
+window.addEventListener("load", loadAll);
 </script>
 </head>
 <body>
   <header>
-    <h1>US Indicators (Debug)</h1>
+    <h1>US Indicators</h1>
     <button id="refresh" onclick="loadAll()">Refresh</button>
-    <button onclick="testAPI()">Test API</button>
   </header>
+
   <div class="wrap">
-    <div id="log" class=""></div>
-    <div class="card"><div class="title">ICE BofA US High Yield OAS</div><div id="hy" style="height:280px;"></div></div>
-    <div class="card"><div class="title">10Y – 1Y Treasury Spread</div><div id="curve" style="height:280px;"></div></div>
-    <div class="card"><div class="title">10Y TIPS Yield</div><div id="tips" style="height:280px;"></div></div>
-    <div class="foot" id="foot">Waiting…</div>
+    <div class="note">Tip: In Safari, use <b>Share → Add to Home Screen</b> to install this as an app. Pinch to zoom, drag to pan, double-tap to auto-fit.</div>
+
+    <div class="card">
+      <div class="title">ICE BofA US High Yield OAS</div>
+      <div id="hy" style="height:280px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="title">10Y – 1Y Treasury Spread</div>
+      <div id="curve" style="height:280px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="title">10Y TIPS Yield</div>
+      <div id="tips" style="height:280px;"></div>
+    </div>
+
+    <div class="foot" id="foot">Loading…</div>
   </div>
-  <script>
-    document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) loadAll(); });
-    window.addEventListener("load", loadAll);
-  </script>
 </body>
 </html>
